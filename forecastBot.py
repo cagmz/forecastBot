@@ -1,22 +1,23 @@
 #!/usr/bin/env python
 
 """
-A reddit bot that crawls subreddits for comments containing a city and state (e.g. Sometown, CA),
-checks to see if it's valid, and then posts a reply with the weather forecast.
+A Reddit bot that delivers the weather forecast for a valid city and state.
 
 Stuff that I need to do:
-    - Track comments that have been replied to (don't reply to the same comment)
-    - Create a do-not-reply list (for botphobes)
+    - Set instance variable for # of days to forecast (default 5)
     - Exception handling for several methods
     - and more
-	
+
 To fix:
-	- Full forecast table doesn't show up on some subreddits with custom CSS styles
+    - Full 10-day forecast table doesn't show up on some subreddits with custom CSS styles
 """
 
 __author__ = 'Carlos Adrian Gomez'
 
 import praw
+from praw.helpers import comment_stream
+import os.path
+import sqlite3
 import re
 import requests
 import random
@@ -26,14 +27,18 @@ user_agent = "forecastBot by /u/cagomez"
 reddit = praw.Reddit(user_agent=user_agent)
 
 username = open("un.txt", "r").read().rstrip()
-
 password = open("pw.txt", "r").read().rstrip()
 reddit.login(username=username, password=password)
 
 wul_api_key = open("wul.txt", "r").read().rstrip()
 
+database_filename = "comments.db"
+is_new_database = not os.path.isfile(database_filename)
+
+CALL_TO_ACTION = "forecastbot!"
+
 # list of subreddits to lurk
-searchable_subs = ["travel", "camping"]
+searchable_subs = ["all"]
 
 
 def set_subreddit():
@@ -44,37 +49,45 @@ def format_forecast(location, raw_json_forecast):
     city_str = location.pop(0)
     state_str = location.pop()
 
-    markup_forecast = "Your 10 day weather forecast for {city}, {state} is: " \
-                      "\n\n ".format(city=city_str, state=state_str)
+    if 'error' in raw_json_forecast['response']:
+        # if the json object has an error key, then the location wasn't found
+        markup_forecast = "Sorry, " + city_str + ", " + state_str + ", was not found."
+    elif 'results' in raw_json_forecast['response']:
+        # the json object will have a results key if there is more than 1 match for the location
+        markup_forecast = "Sorry, " + city_str + ", " + state_str + " produces too many results. " \
+                                                                    "Can you be more specific?"
+    else:
+        # else the json object contains only 1 valid result
+        markup_forecast = "Your 10 day weather forecast for {city}, {state} is: " \
+                          "\n\n ".format(city=city_str, state=state_str)
+        markup_forecast += "\n| "
+        # add days and dates
+        for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
+            markup_forecast += ((day['date']['weekday_short']) + " "
+                                + str(day['date']['month']) + "/" + str(day['date']['day']) + "/"
+                                + str(day['date']['year'])[2:] + " | ")
 
-    markup_forecast += "\n| "
-    # add days and dates
-    for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
-        markup_forecast += ((day['date']['weekday_short']) + " "
-                            + str(day['date']['month']) + "/" + str(day['date']['day']) + "/"
-                            + str(day['date']['year'])[2:] + " | ")
+        # add pipes & hyphens to show mark the end of the column headers
+        markup_forecast += "\n|---	|---	|---	|---	|---	|---	|---	|---	|---	|---	|"
 
-    # add pipes & hyphens to show mark the end of the column headers
-    markup_forecast += "\n|---	|---	|---	|---	|---	|---	|---	|---	|---	|---	|"
+        # add conditions
+        markup_forecast += "\n| "
+        for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
+            markup_forecast += (day['conditions']) + " |"
 
-    # add conditions
-    markup_forecast += "\n| "
-    for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
-        markup_forecast += (day['conditions']) + " |"
+        # add highs
+        markup_forecast += "\n|"
+        for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
+            markup_forecast += "High: " + str((day['high']['fahrenheit'])) + "F |"
 
-    # add highs
-    markup_forecast += "\n|"
-    for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
-        markup_forecast += "High: " + str((day['high']['fahrenheit'])) + "F |"
+        # add lows
+        markup_forecast += "\n|"
+        for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
+            markup_forecast += "Low: " + str(day['low']['fahrenheit']) + "F | "
 
-    # add lows
-    markup_forecast += "\n|"
-    for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
-        markup_forecast += "Low: " + str(day['low']['fahrenheit']) + "F | "
-
-    # per WUL TOS, data must include attribution
-    markup_forecast += "\n\n ^Data ^courtesy ^of ^Weather ^Underground, ^Inc."
-    # print(markup_forecast)
+        # per WUL TOS, data must include attribution
+        markup_forecast += "\n\n ^Data ^courtesy ^of ^Weather ^Underground, ^Inc."
+        # print(markup_forecast)
     return markup_forecast
 
 
@@ -98,7 +111,7 @@ def get_weather(location):
     return json_dict
 
 
-def search_for_valid_city_state(comment):
+def search_for_city_state(comment_body):
     # set location list to contain "invalid". if comment doesn't contain a valid city, then
     # "invalid" will be contained in the list
     location = ["invalid", "invalid"]
@@ -112,32 +125,17 @@ def search_for_valid_city_state(comment):
     city_state_pattern = re.compile(pattern)
 
     # try to find matches
-    match = city_state_pattern.search(comment)
+    match = city_state_pattern.search(comment_body)
     if match:
-        city = match.group("city_sub_str")
-        state = match.group("state_sub_str")
-        # try to validate potential city, state with is_valid_location()
-        if is_valid_location(city, state) is True:
-            # if city, state are valid, replace "invalid" in list with city and state
-            location[0] = city
-            location[1] = state
+        location[0] = match.group("city_sub_str")
+        location[1] = match.group("state_sub_str")
     return location
 
 
-def is_valid_location(city_str, state_str):
-    city_str = city_str.replace(" ", "%20")     # URL encode city
-
-    # build URL for SBA API
-    url = 'http://api.sba.gov/geodata/all_links_for_city_of/{city}/{state_code}.json'.format(
-        city=city_str, state_code=state_str)
-
-    # get response
-    response = requests.get(url)
-    # populate dictionary with decoded JSON
-    json_dictionary = response.json()
-    if not json_dictionary:                     # if dictionary is empty, then API couldn't find the city
-        result = False
-    else:
+def contains_call(comment_body):
+    result = False
+    lowercase_comment = comment_body.lower()
+    if lowercase_comment.find(CALL_TO_ACTION) >= 0:
         result = True
     return result
 
@@ -147,22 +145,36 @@ def sleep():
     return
 
 
-# main
-while True:
-    subreddit = reddit.get_subreddit(set_subreddit())
-    for submission in subreddit.get_new(limit=25):
-        print(submission)
-        flat_comments = praw.helpers.flatten_tree(submission.comments)
-        for comment in flat_comments:
-            if not hasattr(comment, 'body'):
-                continue
-            location = search_for_valid_city_state(comment.body)
-            if location[-1] is not "invalid":
-                forecast = format_forecast(location, get_weather(location=location))
-                comment.reply(forecast)
-                print("Posted a comment:\n\n " + forecast)
-                sleep()
-    sleep()
+with sqlite3.connect(database_filename) as comment_db:
+    if is_new_database:
+        print("No prior database found! Creating schema...")
+        cursor = comment_db.cursor()
+        cursor.execute("CREATE TABLE comments(comment_id TEXT PRIMARY KEY)")
+        comment_db.commit()
+    else:
+        print("Comments database exists: assuming that schema exists...")
 
+    while True:
+        subreddit = reddit.get_subreddit(set_subreddit())
+        for comment in comment_stream(reddit_session=reddit, subreddit=subreddit):
+            print("Checking comment " + comment.id + ": " + comment.body)
+            if contains_call(comment.body):
+                # comment contains a call to action.
+                # check to see if the comment has already been replied to
+                cursor.execute('''SELECT * from comments WHERE comment_id=?''', (comment.id,))
+                contains = cursor.fetchone()
+                if contains is None:
+                    # comment is unique, so reply to it
+                    print("Called by comment #: " + comment.id + ": " + comment.body)
+                    location = search_for_city_state(comment.body)
+                    forecast = format_forecast(location, get_weather(location=location))
+                    comment.reply(forecast)
+                    print("Posted a comment:\n\n " + forecast)
+                    cursor.execute("INSERT INTO comments(comment_id) VALUES (?)", (comment.id,))
+                    print("Added comment " + comment.id + " to comments database.")
+                    comment_db.commit()
+                else:
+                    print("Already replied to comment " + comment.id + ": " + comment.body)
+        sleep()
 
-
+comment_db.close()

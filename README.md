@@ -1,4 +1,7 @@
-# forecastBot
-A Reddit bot written in Python 3 that crawls comments for a city followed by a state code (e.g. Sometown, CA) and posts the weather forecast as a reply.
+forecastBot
+----------
+
+A Reddit bot that delivers the weather forecast for a valid city and state.
+Call it by mentioning "forecastBot!" followed by a city and state code.
 
 See forecastBot in action at: https://www.reddit.com/user/forecastbot
