@@ -3,13 +3,10 @@
 """
 A Reddit bot that delivers the weather forecast for a valid city and state.
 
-Stuff that I need to do:
-    - Set instance variable for # of days to forecast (default 5)
+Todo:
+    - Allow users to specify the number of days to forecast (between 1 and 10, inclusive)
     - Exception handling for several methods
     - and more
-
-To fix:
-    - Full 10-day forecast table doesn't show up on some subreddits with custom CSS styles
 """
 
 __author__ = 'Carlos Adrian Gomez'
@@ -36,6 +33,10 @@ database_filename = "comments.db"
 is_new_database = not os.path.isfile(database_filename)
 
 CALL_TO_ACTION = "forecastbot!"
+WU_ATTRIBUTION = "^Data ^courtesy ^of ^Weather ^Underground, ^Inc."
+MAX_DAYS_TO_FORECAST = 10
+days_to_forecast = 5
+days_forecasted = 0
 
 # list of subreddits to lurk
 searchable_subs = ["all"]
@@ -46,6 +47,7 @@ def set_subreddit():
 
 
 def format_forecast(location, raw_json_forecast):
+    global days_forecasted
     city_str = location.pop(0)
     state_str = location.pop()
 
@@ -58,37 +60,68 @@ def format_forecast(location, raw_json_forecast):
                                                                     "Can you be more specific?"
     else:
         # else the json object contains only 1 valid result
-        markup_forecast = "Your 10 day weather forecast for {city}, {state} is: " \
-                          "\n\n ".format(city=city_str, state=state_str)
+        markup_forecast = "Your {days_to_forecast} day weather forecast for {city}, {state} is: " \
+                          "\n\n ".format(days_to_forecast=days_to_forecast, city=city_str, state=state_str)
+
         markup_forecast += "\n| "
+        reset_days_forecasted()
+
         # add days and dates
         for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
             markup_forecast += ((day['date']['weekday_short']) + " "
                                 + str(day['date']['month']) + "/" + str(day['date']['day']) + "/"
                                 + str(day['date']['year'])[2:] + " | ")
+            days_forecasted += 1
+            if finished_forecasting():
+                break
 
         # add pipes & hyphens to show mark the end of the column headers
         markup_forecast += "\n|---	|---	|---	|---	|---	|---	|---	|---	|---	|---	|"
 
-        # add conditions
         markup_forecast += "\n| "
+        reset_days_forecasted()
+
+        # add conditions
         for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
             markup_forecast += (day['conditions']) + " |"
+            days_forecasted += 1
+            if finished_forecasting():
+                break
+
+        markup_forecast += "\n|"
+        reset_days_forecasted()
 
         # add highs
-        markup_forecast += "\n|"
         for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
             markup_forecast += "High: " + str((day['high']['fahrenheit'])) + "F |"
+            days_forecasted += 1
+            if finished_forecasting():
+                break
+
+        markup_forecast += "\n|"
+        reset_days_forecasted()
 
         # add lows
-        markup_forecast += "\n|"
         for day in raw_json_forecast['forecast']['simpleforecast']['forecastday']:
             markup_forecast += "Low: " + str(day['low']['fahrenheit']) + "F | "
+            days_forecasted += 1
+            if finished_forecasting():
+                break
 
         # per WUL TOS, data must include attribution
-        markup_forecast += "\n\n ^Data ^courtesy ^of ^Weather ^Underground, ^Inc."
+        markup_forecast += "\n\n " + WU_ATTRIBUTION
         # print(markup_forecast)
     return markup_forecast
+
+
+def finished_forecasting():
+    return days_forecasted == days_to_forecast
+
+
+def reset_days_forecasted():
+    global days_forecasted
+    days_forecasted = 0
+    return
 
 
 def get_weather(location):
@@ -146,26 +179,26 @@ def sleep():
 
 
 with sqlite3.connect(database_filename) as comment_db:
+    cursor = comment_db.cursor()
     if is_new_database:
         print("No prior database found! Creating schema...")
-        cursor = comment_db.cursor()
         cursor.execute("CREATE TABLE comments(comment_id TEXT PRIMARY KEY)")
         comment_db.commit()
     else:
-        print("Comments database exists: assuming that schema exists...")
+        print("Comment database exists: assuming that schema exists...")
 
     while True:
         subreddit = reddit.get_subreddit(set_subreddit())
         for comment in comment_stream(reddit_session=reddit, subreddit=subreddit):
-            print("Checking comment " + comment.id + ": " + comment.body)
+            # print("Checking comment " + comment.id + ": " + comment.body)
             if contains_call(comment.body):
                 # comment contains a call to action.
                 # check to see if the comment has already been replied to
                 cursor.execute('''SELECT * from comments WHERE comment_id=?''', (comment.id,))
                 contains = cursor.fetchone()
                 if contains is None:
-                    # comment is unique, so reply to it
-                    print("Called by comment #: " + comment.id + ": " + comment.body)
+                    # select command didn't return any rows matching comment id, so comment is unique (reply to it)
+                    # print("Called by comment #: " + comment.id + ": " + comment.body)
                     location = search_for_city_state(comment.body)
                     forecast = format_forecast(location, get_weather(location=location))
                     comment.reply(forecast)
@@ -173,8 +206,8 @@ with sqlite3.connect(database_filename) as comment_db:
                     cursor.execute("INSERT INTO comments(comment_id) VALUES (?)", (comment.id,))
                     print("Added comment " + comment.id + " to comments database.")
                     comment_db.commit()
-                else:
-                    print("Already replied to comment " + comment.id + ": " + comment.body)
+                #else:
+                    # print("Already replied to comment " + comment.id + ": " + comment.body)
         sleep()
 
 comment_db.close()
