@@ -4,7 +4,6 @@
 A Reddit bot that delivers the weather forecast for a valid city and state.
 
 Todo:
-    - Fix regex for # days to forecast to match ##|#| and day|days
     - Exception handling for several methods
     - and more
 """
@@ -32,11 +31,13 @@ wul_api_key = open("wul.txt", "r").read().rstrip()
 database_filename = "comments.db"
 is_new_database = not os.path.isfile(database_filename)
 
+# some constants
 CALL_TO_ACTION = "forecastbot!"
 WU_ATTRIBUTION = "^Data ^courtesy ^of ^Weather ^Underground, ^Inc."
 MIN_DAYS_TO_FORECAST = 1
 MAX_DAYS_TO_FORECAST = 10
 DEFAULT_DAYS_TO_FORECAST = 5
+
 days_to_forecast = DEFAULT_DAYS_TO_FORECAST
 days_forecasted = 0
 
@@ -169,22 +170,30 @@ def search_for_city_state(comment_body):
 
 def set_days_to_forecast(comment_body):
     global days_to_forecast
-    pattern = "(?P<days_value>(\d){1,2}.?(days))"
-    digit_extraction_pattern = re.compile(pattern)
-    match = digit_extraction_pattern.search(comment_body)
+    # pattern to match a user request for number of days to forecast (form: [digits] + "day"|"days" )
+    pattern = "(?P<days_value>(\d){1,2}.?(days?))"
+    # compile pattern to use with match()
+    user_request_pattern = re.compile(pattern)
+
+    # try to find matches for a user request
+    match = user_request_pattern.search(comment_body)
     if match:
+        # user request found
         try:
             user_request = match.group("days_value")
+            # extract number of days from user request
             user_requested_days = int(re.findall("\d+", user_request).pop())
-            if user_requested_days >= MIN_DAYS_TO_FORECAST and user_requested_days <= MAX_DAYS_TO_FORECAST:
+            if MIN_DAYS_TO_FORECAST <= user_requested_days <= MAX_DAYS_TO_FORECAST:
                 days_to_forecast = user_requested_days
             else:
                 raise ValueError
         except ValueError:
-            days_to_forecast = 5
+            days_to_forecast = DEFAULT_DAYS_TO_FORECAST
     else:
+        # forecast default number of days if a user request isn't found
         days_to_forecast = DEFAULT_DAYS_TO_FORECAST
     return
+
 
 def contains_call(comment_body):
     result = False
