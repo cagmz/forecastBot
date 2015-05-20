@@ -4,7 +4,7 @@
 A Reddit bot that delivers the weather forecast for a valid city and state.
 
 Todo:
-    - Allow users to specify the number of days to forecast (between 1 and 10, inclusive)
+    - Fix regex for # days to forecast to match ##|#| and day|days
     - Exception handling for several methods
     - and more
 """
@@ -34,8 +34,10 @@ is_new_database = not os.path.isfile(database_filename)
 
 CALL_TO_ACTION = "forecastbot!"
 WU_ATTRIBUTION = "^Data ^courtesy ^of ^Weather ^Underground, ^Inc."
+MIN_DAYS_TO_FORECAST = 1
 MAX_DAYS_TO_FORECAST = 10
-days_to_forecast = 5
+DEFAULT_DAYS_TO_FORECAST = 5
+days_to_forecast = DEFAULT_DAYS_TO_FORECAST
 days_forecasted = 0
 
 # list of subreddits to lurk
@@ -165,6 +167,25 @@ def search_for_city_state(comment_body):
     return location
 
 
+def set_days_to_forecast(comment_body):
+    global days_to_forecast
+    pattern = "(?P<days_value>(\d){1,2}.?(days))"
+    digit_extraction_pattern = re.compile(pattern)
+    match = digit_extraction_pattern.search(comment_body)
+    if match:
+        try:
+            user_request = match.group("days_value")
+            user_requested_days = int(re.findall("\d+", user_request).pop())
+            if user_requested_days >= MIN_DAYS_TO_FORECAST and user_requested_days <= MAX_DAYS_TO_FORECAST:
+                days_to_forecast = user_requested_days
+            else:
+                raise ValueError
+        except ValueError:
+            days_to_forecast = 5
+    else:
+        days_to_forecast = DEFAULT_DAYS_TO_FORECAST
+    return
+
 def contains_call(comment_body):
     result = False
     lowercase_comment = comment_body.lower()
@@ -199,6 +220,7 @@ with sqlite3.connect(database_filename) as comment_db:
                 if contains is None:
                     # select command didn't return any rows matching comment id, so comment is unique (reply to it)
                     # print("Called by comment #: " + comment.id + ": " + comment.body)
+                    set_days_to_forecast(comment.body)
                     location = search_for_city_state(comment.body)
                     forecast = format_forecast(location, get_weather(location=location))
                     comment.reply(forecast)
