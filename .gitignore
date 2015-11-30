@@ -1,3 +1,7 @@
 # ignore sensitve files
 *.txt
+*.db
+
+# ignore Pycharm
+.idea/
 
