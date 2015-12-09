@@ -206,6 +206,13 @@ def contains_call(comment_body):
     return result
 
 
+def log(to_log):
+    log = open(log_filename, "a+")
+    log.write(str(datetime.datetime.utcnow()) + ": " + to_log)
+    log.close()
+    return
+
+
 def sleep():
     time.sleep(5)
     return
@@ -220,34 +227,31 @@ with sqlite3.connect(database_filename) as comment_db:
     else:
         print("Comment database exists: assuming that schema exists...")
 
-    # open log file for writing
-    log = open(log_filename, "w+")
-    log.write(str(datetime.datetime.utcnow()) + " forecastBot initialized.\n")
+    log(str(datetime.datetime.utcnow()) + " forecastBot initialized.\n")
 
     # main bot engine
     while True:
         subreddit = reddit.get_subreddit(set_subreddit())
         for comment in comment_stream(reddit_session=reddit, subreddit=subreddit):
-            # print("Checking comment by " + str(comment.author) + ", id: " + comment.id + ": " + comment.body)
+            print("Checking comment by " + str(comment.author) + ", id: " + comment.id + ": " + comment.body)
+            # check if comment contains a call to action
             if contains_call(comment.body):
-                # comment contains a call to action.
                 # check to see if the comment has already been replied to
                 cursor.execute('''SELECT * FROM comments WHERE comment_id=?''', (comment.id,))
                 contains = cursor.fetchone()
                 if contains is None:
                     # select command didn't return any rows matching comment id, so comment is unique (reply to it)
-                    # print("Called by comment #: " + comment.id + ": " + comment.body)
+                    print("Called by comment #: " + comment.id + ": " + comment.body)
                     set_days_to_forecast(comment.body)
                     location = search_for_city_state(comment.body)
                     forecast = format_forecast(location, get_weather(location=location))
                     comment.reply(forecast)
                     print("Posted a comment:\n\n " + forecast)
                     cursor.execute("INSERT INTO comments(comment_id) VALUES (?)", (comment.id,))
-                    log.write("Replied to comment id " + comment.id + " by author '" + str(comment.author) + "'.\n")
+                    log("Replied to comment id " + comment.id + " by author '" + str(comment.author) + "'.\n")
                     comment_db.commit()
-                    # else:
-                    # print("Already replied to comment " + comment.id + ": " + comment.body)
+                else:
+                    print("Already replied to comment " + comment.id + ". Skipping.")
         sleep()
 
-log.close()
 comment_db.close()
